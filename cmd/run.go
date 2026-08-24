@@ -41,6 +41,14 @@ func Run(cmd *cobra.Command, args []string) {
 func SetupRunFlags(cmd *cobra.Command) {
 	// Core
 	cmd.PersistentFlags().Bool("testnet", false, "Use the DeSo testnet. Mainnet is used by default")
+	cmd.PersistentFlags().Bool("forknet", false,
+		"Use the forked-social standalone network mainnet params (FS1 public key prefixes, "+
+			"protocol port 42000, API port 42001). Mutually exclusive with --testnet and "+
+			"--forknet-testnet. Env: FORKNET=true")
+	cmd.PersistentFlags().Bool("forknet-testnet", false,
+		"Use the forked-social standalone network testnet params (tFS public key prefixes, "+
+			"protocol port 42420, API port 42421). Mutually exclusive with --testnet and "+
+			"--forknet. Env: FORKNET_TESTNET=true")
 	cmd.PersistentFlags().String("data-dir", "",
 		"The location where all of the protocol-related data like blocks is stored. "+
 			"Useful for testing situations where multiple clients need to run on the "+
@@ -192,13 +200,11 @@ func SetupRunFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().String("block-producer-seed", "",
 		"When set, all blocks produced by the block producer will be signed by this "+
 			"seed.")
-	cmd.PersistentFlags().StringSlice("trusted-block-producer-public-keys", []string{
-		"BC1YLgS1zDJQqywFpsty4fFheUrZxVQNKEsrttppvUESFZCq6Nfoypm",
-		"BC1YLh768bVj2R3QpSiduxcvn7ipxF3L3XHsabZYtCGtsinUnNrZvNN",
-		"BC1YLgsiUgM1Vr35YwbkSfZB3NC9tyrMXBPuJ2SEBf8naDf6PRpNit9",
-		"BC1YLgW5jWudzSUvrvNkD4GReN3kvGvsTuqLLttKfsCbXb7vLSCjwTk",
-		"BC1YLi8X7U9DZc2UqPE4s5PjrNJJUa6PKygD7VF4u8vy96srm18YvEX",
-	},
+	// Trusted block producer keys are NOT given an upstream default: operators
+	// must explicitly opt in to a trusted-producer network by setting this
+	// flag. Note that this flag cannot be set via environment variables (see
+	// the TODO in config.go), so it must be passed on the command line.
+	cmd.PersistentFlags().StringSlice("trusted-block-producer-public-keys", []string{},
 		"When set, this node will only accept new blocks that are signed by the trusted block "+
 			"producers. This setting, is pretty novel. It allows a network of full nodes who "+
 			"trust each other to create their own network that can't be easily taken over by a 51% "+
@@ -207,7 +213,8 @@ func SetupRunFlags(cmd *cobra.Command) {
 			"allow open mining, all they need to do is unset these public keys (or one of the owners "+
 			"of the public keys can release her key material, pulling a metaphorical 'ripcord'). "+
 			"Importantly, until this point, the network will be completely protected from a 51% attack, "+
-			"giving it time to accumulate the necessary hash power.")
+			"giving it time to accumulate the necessary hash power. Defaults to an empty list, meaning "+
+			"blocks from any producer are accepted.")
 	cmd.PersistentFlags().Uint64("trusted-block-producer-start-height", 37000,
 		"If --trusted-block-producer-public-keys is set, then all blocks after this height must "+
 			"be signed by one of these keys in order to be considered valid. Setting this value to zero "+

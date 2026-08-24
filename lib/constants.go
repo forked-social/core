@@ -528,8 +528,19 @@ func (pvt ProtocolVersionType) After(version ProtocolVersionType) bool {
 type DeSoParams struct {
 	// The network type (mainnet, testnet, etc).
 	NetworkType NetworkType
+	// ForkNetwork is set on the forked-social standalone network params (see
+	// fork_params.go). It is used to disambiguate the fork variants from the
+	// upstream DeSo networks that share the same NetworkType (e.g. when picking
+	// a default data directory).
+	ForkNetwork bool
 	// Set to true when we're running in regtest mode. This is useful for testing.
 	ExtraRegtestParamUpdaterKeys map[PkMapKey]bool
+	// DisablePoWBlockRewards suppresses PoW block rewards entirely (they are
+	// set to zero for all non-genesis heights). Networks whose entire supply
+	// is allocated in the genesis block — like the fork network, which grants
+	// 100% of MaxCoinSupply to the miner key — set this so that mining never
+	// mints new coins and the total supply can never exceed the cap.
+	DisablePoWBlockRewards bool
 	// The current protocol version we're running.
 	ProtocolVersion ProtocolVersionType
 	// The minimum protocol version we'll allow a peer we connect to
@@ -897,7 +908,8 @@ func (params *DeSoParams) EnableRegtest(isAcceleratedRegtest bool) {
 	glog.Infof("Enabling regtest mode: accelerated=%v", isAcceleratedRegtest)
 
 	// Add a key defined in n0_test to the ParamUpdater set when running in regtest mode.
-	// Seed: verb find card ship another until version devote guilt strong lemon six
+	// Note: this is an upstream-inherited, publicly-documented development key
+	// for local regtest testing only. It has no authority on the fork network.
 	params.ExtraRegtestParamUpdaterKeys = map[PkMapKey]bool{}
 	params.ExtraRegtestParamUpdaterKeys[MakePkMapKey(MustBase58CheckDecode(
 		"tBCKVERmG9nZpHTk2AVPqknWc1Mw9HHAnqrTpW1RnXpXMQ4PsQgnmV"))] = true
@@ -970,7 +982,12 @@ func (params *DeSoParams) GetSnapshotBlockHeightPeriod(blockHeight uint64, curre
 
 // GenesisBlock defines the genesis block used for the DeSo mainnet and testnet
 var (
-	ArchitectPubKeyBase58Check = "BC1YLg3oh6Boj8e2boCo1vQCYHLk1rjsHF6jthBdvSw79bixQvKK6Qa"
+	// ArchitectPubKeyBase58Check is the governance root key of the fork network
+	// ("founder-root"). It is the sole param-updater key (see
+	// GetParamUpdaterPublicKeys) and is also used as a placeholder transactor
+	// in a few places (e.g. block templates without a miner key). The upstream
+	// DeSo "Architect" key previously lived here; this fork replaces it.
+	ArchitectPubKeyBase58Check = FounderRootPubKeyBase58Check
 	// This is the public key corresponding to the BitcoinBurnAddress on mainnet.
 	BurnPubKeyBase58Check = "BC1YLjWBf2qnDJmi8HZzzCPeXqy4dCKq95oqqzerAyW8MUTbuXTb1QT"
 
@@ -1005,26 +1022,19 @@ var (
 )
 
 func GetParamUpdaterPublicKeys(blockHeight uint32, params *DeSoParams) map[PkMapKey]bool {
-	// We use legacy paramUpdater values before this block height
+	// Governance of the fork network is held exclusively by the founder-root
+	// key. There is no legacy/upstream key rotation on this network, so the
+	// same key is returned for all block heights.
 	var paramUpdaterKeys map[PkMapKey]bool
 	if blockHeight < params.ForkHeights.ParamUpdaterRefactorBlockHeight {
+		// Legacy heights (upstream networks only — the fork params set
+		// ParamUpdaterRefactorBlockHeight to zero).
 		paramUpdaterKeys = map[PkMapKey]bool{
-			// 19Hg2mAJUTKFac2F2BBpSEm7BcpkgimrmD
-			MakePkMapKey(MustBase58CheckDecode(ArchitectPubKeyBase58Check)):                                true,
-			MakePkMapKey(MustBase58CheckDecode("BC1YLiXwGTte8oXEEVzm4zqtDpGRx44Y4rqbeFeAs5MnzsmqT5RcqkW")): true,
-			MakePkMapKey(MustBase58CheckDecode("BC1YLgGLKjuHUFZZQcNYrdWRrHsDKUofd9MSxDq4NY53x7vGt4H32oZ")): true,
-			MakePkMapKey(MustBase58CheckDecode("BC1YLj8UkNMbCsmTUTx5Z2bhtp8q86csDthRmK6zbYstjjbS5eHoGkr")): true,
-			MakePkMapKey(MustBase58CheckDecode("BC1YLgD1f7yw7Ue8qQiW7QMBSm6J7fsieK5rRtyxmWqL2Ypra2BAToc")): true,
-			MakePkMapKey(MustBase58CheckDecode("BC1YLfz4GH3Gfj6dCtBi8bNdNTbTdcibk8iCZS75toUn4UKZaTJnz9y")): true,
-			MakePkMapKey(MustBase58CheckDecode("BC1YLfoSyJWKjHGnj5ZqbSokC3LPDNBMDwHX3ehZDCA3HVkFNiPY5cQ")): true,
+			MakePkMapKey(MustBase58CheckDecode(ArchitectPubKeyBase58Check)): true,
 		}
 	} else {
 		paramUpdaterKeys = map[PkMapKey]bool{
-			MakePkMapKey(MustBase58CheckDecode("BC1YLgKBcYwyWCqnBHKoJY2HX1sc38A7JuA2jMNEmEXfcRpc7D6Hyiu")): true,
-			MakePkMapKey(MustBase58CheckDecode("BC1YLfrtYZs4mCeSALnjTUZMdcwsWNHoNaG5gWWD5WyvRrWNTGWWq1q")): true,
-			MakePkMapKey(MustBase58CheckDecode("BC1YLiABrQ1P5pKXdm8S1vj1annx6D8Asku5CXX477dpwYXDamprpWd")): true,
-			MakePkMapKey(MustBase58CheckDecode("BC1YLfqYyePuSYPVFB2mdh9Dss7PJ9j5vJts87b9zGbVJhQDjCJNdjb")): true,
-			MakePkMapKey(MustBase58CheckDecode("BC1YLjDmDtymghnMgAPmTCyykqhcNR19sgSS7pWNd36FXTZpUZNHypj")): true,
+			MakePkMapKey(MustBase58CheckDecode(ArchitectPubKeyBase58Check)): true,
 		}
 	}
 
@@ -1731,7 +1741,14 @@ func GetDataDir(params *DeSoParams) string {
 	configDirs := configdir.New(
 		ConfigDirVendorName, ConfigDirAppName)
 	dirString := configDirs.QueryFolders(configdir.Global)[0].Path
-	dataDir := filepath.Join(dirString, params.NetworkType.String())
+	// Fork-network nodes get their own subdirectory so that chains for the
+	// fork and upstream DeSo networks that share a NetworkType never mix
+	// databases when --data-dir is not set explicitly.
+	networkDirName := params.NetworkType.String()
+	if params.ForkNetwork {
+		networkDirName = "FORKNET_" + networkDirName
+	}
+	dataDir := filepath.Join(dirString, networkDirName)
 	if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
 		log.Fatalf("GetDataDir: Could not create data directories (%s): %v", dataDir, err)
 	}
@@ -1950,8 +1967,11 @@ const NanoSecsPerYear = uint64(365) * 24 * 60 * 60 * 1e9 // 365 days * 24 hours 
 
 const BytesPerKB = 1000
 
-const DefaultMainnetCheckpointProvider = "https://node.deso.org"
-const DefaultTestnetCheckpointProvider = "https://test.deso.org"
+// Default checkpoint syncing providers for the fork network. The seed backend
+// APIs run at these domains; non-seed nodes bootstrap checkpoint syncing from
+// them by default.
+const DefaultMainnetCheckpointProvider = "https://node.forked.social"
+const DefaultTestnetCheckpointProvider = "https://test.forked.social"
 
 const RoutePathGetCommittedTipBlockInfo = "/api/v0/get-committed-tip-block-info"
 

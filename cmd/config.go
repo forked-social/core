@@ -108,11 +108,34 @@ func GetStringSliceWorkaround(flagName string) []string {
 func LoadConfig() *Config {
 	config := Config{}
 
-	// Core
+	// Core — network selection. --forknet/--forknet-testnet select the
+	// forked-social standalone network params; they are mutually exclusive
+	// with each other and with --testnet. Env equivalents (via viper):
+	// FORKNET, FORKNET_TESTNET, TESTNET.
+	forknet := viper.GetBool("forknet")
+	forknetTestnet := viper.GetBool("forknet-testnet")
 	testnet := viper.GetBool("testnet")
-	if testnet {
+	if forknet && testnet {
+		glog.Fatal("--forknet cannot be combined with --testnet")
+	}
+	if forknetTestnet && testnet {
+		glog.Fatal("--forknet-testnet cannot be combined with --testnet")
+	}
+	if forknet && forknetTestnet {
+		glog.Fatal("--forknet and --forknet-testnet are mutually exclusive")
+	}
+	switch {
+	case forknet:
+		config.Params = &lib.ForkMainnetParams
+		glog.Infof("Network selection: forked-social network (mainnet-style: %s prefixes, protocol port %d, API port %d)",
+			"FS1", config.Params.DefaultSocketPort, config.Params.DefaultJSONPort)
+	case forknetTestnet:
+		config.Params = &lib.ForkTestnetParams
+		glog.Infof("Network selection: forked-social network (testnet-style: %s prefixes, protocol port %d, API port %d)",
+			"tFS", config.Params.DefaultSocketPort, config.Params.DefaultJSONPort)
+	case testnet:
 		config.Params = &lib.DeSoTestnetParams
-	} else {
+	default:
 		config.Params = &lib.DeSoMainnetParams
 	}
 
@@ -227,7 +250,9 @@ func LoadConfig() *Config {
 	// How do we support this? another flag I guess or they just provide an invalid value
 	// to the checkpoint-syncing-providers flag.
 	if len(config.CheckpointSyncingProviders) == 0 && !config.Regtest {
-		if testnet {
+		// The defaults point at the fork network's seed backend APIs
+		// (node.forked.social / test.forked.social).
+		if config.Params.NetworkType == lib.NetworkType_TESTNET {
 			config.CheckpointSyncingProviders = []string{lib.DefaultTestnetCheckpointProvider}
 		} else {
 			config.CheckpointSyncingProviders = []string{lib.DefaultMainnetCheckpointProvider}

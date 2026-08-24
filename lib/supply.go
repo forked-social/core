@@ -98,6 +98,16 @@ func CalcBlockRewardNanos(blockHeight uint32, params *DeSoParams) uint64 {
 		return MiningSupplyIntervals[0].BlockRewardNanos
 	}
 
+	// Fork networks mint their entire supply in the genesis allocation (see
+	// ForkSeedBalances), so PoW block rewards are suppressed for every height
+	// after genesis. This covers both the block templates produced by the
+	// miner/block producer and the consensus rule in _validateBlockReward that
+	// verifies block reward outputs, so the total supply can never exceed the
+	// cap during the PoW bootstrap window.
+	if params != nil && params.DisablePoWBlockRewards {
+		return 0
+	}
+
 	if params.IsPoSBlockHeight(uint64(blockHeight)) {
 		return 0
 	}
