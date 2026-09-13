@@ -28,10 +28,10 @@ const (
 
 	// MinerPubKeyBase58Check receives 100% of the MaxCoinSupply in the genesis
 	// allocation. It is the key used to mine the PoW bootstrap blocks.
-	MinerPubKeyBase58Check = "FS13xm5oxJvGKd7194u5f2paA9WaaQpZSvz7Tzu8uXDngxromi3Lnv"
+	MinerPubKeyBase58Check = "FS13xKCghHsuC7Kw6eS1Y7cxePu3ZJ6PbYpxfaZzNcRKEQFXuFU2tp"
 
 	// BlockProducerPubKeyBase58Check is the founder-operated block producer.
-	BlockProducerPubKeyBase58Check = "FS13yDA1PGpsRQ2zDSVhiwyJVP6zhYdjaiekE2bvfYC6ChZg95ZemM"
+	BlockProducerPubKeyBase58Check = "FS13wbrugMsxmBzo41C1NGYUjCn4Tt4mQRKjzZAGa51wGCpKPJQ4cP"
 
 	// StarterDeSoPubKeyBase58Check is the testnet faucet key. It is referenced
 	// in deployment config only (the seed itself is runtime-injected).
