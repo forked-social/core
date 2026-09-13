@@ -175,7 +175,21 @@ func forkParamsCommon() DeSoParams {
 		// our chain valid.
 		MinChainWorkHex: "0000000000000000000000000000000000000000000000000000000000000000",
 
-		MaxTipAgePoW: 24 * time.Hour,
+		// The fork network is seeded by a solo miner that must mine from the
+		// genesis tip with no peers (see MinerPubKeyBase58Check and the
+		// empty DNSSeeds above). The genesis block is timestamped at
+		// launch-prep time, which is arbitrarily far in the past relative to
+		// whenever the seed first boots. If the tip were considered stale
+		// (as on mainnet/testnet, which rely on peers to refresh the tip),
+		// chainState() would permanently report SyncStateSyncingHeaders and
+		// DeSoMiner._startThread would silently wait forever without
+		// mining. Mirror the upstream regtest precedent in
+		// DeSoParams.EnableRegtest ("Make sure we don't care about
+		// blockchain tip age") so the tip age never gates the seed.
+		MaxTipAgePoW: 1000000 * time.Hour,
+		// After the PoS cutover the tip refreshes continuously while the
+		// validator set produces blocks, so the peer-network default is
+		// safe (and conservative) here.
 		MaxTipAgePoS: 24 * time.Hour,
 
 		BitcoinExchangeFeeBasisPoints: 10,

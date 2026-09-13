@@ -283,8 +283,19 @@ func (desoMiner *DeSoMiner) MineAndProcessSingleBlock(threadIndex uint32, mempoo
 }
 
 func (desoMiner *DeSoMiner) _startThread(threadIndex uint32) {
+	// Remember when we last logged that the miner is waiting on sync state
+	// so a miner that is permanently gated (e.g. a stale tip on a network
+	// with no peers) is observable at default verbosity instead of silent.
+	lastWaitLog := time.Time{}
 	for {
-		if desoMiner.BlockProducer.chain.chainState() != SyncStateFullyCurrent {
+		chainState := desoMiner.BlockProducer.chain.chainState()
+		if chainState != SyncStateFullyCurrent {
+			if lastWaitLog.IsZero() || time.Since(lastWaitLog) >= time.Minute {
+				glog.Infof("DeSoMiner._startThread: thread %d not mining; "+
+					"waiting for chain state %s (current state: %s)",
+					threadIndex, SyncStateFullyCurrent, chainState)
+				lastWaitLog = time.Now()
+			}
 			time.Sleep(1 * time.Second)
 			continue
 		}
