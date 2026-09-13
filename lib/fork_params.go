@@ -120,7 +120,7 @@ var ForkGenesisBlock = MsgDeSoBlock{
 	Header: &MsgDeSoHeader{
 		Version:               0,
 		PrevBlockHash:         &BlockHash{},
-		TransactionMerkleRoot: mustDecodeHexBlockHash("d34e4d002ed96fbb0983c302de77f87ec1d14ea5e9f235a7c22d6e8566f317bf"),
+		TransactionMerkleRoot: mustDecodeHexBlockHash("293b99bd0e7af8f1eb3c67b8eaae88d2624d5f49c9ea0e61aad16c4d5b8433da"),
 		// Sun Aug 23 2026 @ 00:00:00 UTC.
 		TstampNanoSecs: SecondsToNanoSeconds(1787443200),
 		Height:         uint64(0),
@@ -145,7 +145,7 @@ var ForkGenesisBlock = MsgDeSoBlock{
 // ForkGenesisBlockHashHex is the hash of ForkGenesisBlock. It is verified
 // against the block at node boot by validateParams in core/cmd/node.go.
 // Recompute with: go run ./scripts/fork_genesis -print
-var ForkGenesisBlockHashHex = "3cc0c2827a5f7b8b32514d214e4a4c5f7ea7c20c3a715799554b6131b186d8cc"
+var ForkGenesisBlockHashHex = "d4351b1cb8f76e53af63bfe23dd420a304e91a78eb3ec34ba712a8bc5a10dd47"
 
 var ForkGenesisBlockHash = mustDecodeHexBlockHash(ForkGenesisBlockHashHex)
 
