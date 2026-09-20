@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"flag"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -127,12 +128,8 @@ func LoadConfig() *Config {
 	switch {
 	case forknet:
 		config.Params = &lib.ForkMainnetParams
-		glog.Infof("Network selection: forked-social network (mainnet-style: %s prefixes, protocol port %d, API port %d)",
-			"FS1", config.Params.DefaultSocketPort, config.Params.DefaultJSONPort)
 	case forknetTestnet:
 		config.Params = &lib.ForkTestnetParams
-		glog.Infof("Network selection: forked-social network (testnet-style: %s prefixes, protocol port %d, API port %d)",
-			"tFS", config.Params.DefaultSocketPort, config.Params.DefaultJSONPort)
 	case testnet:
 		config.Params = &lib.DeSoTestnetParams
 	default:
@@ -151,6 +148,29 @@ func LoadConfig() *Config {
 	config.DataDirectory = filepath.Join(dataDir, lib.DBVersionString)
 	if err := os.MkdirAll(config.DataDirectory, os.ModePerm); err != nil {
 		glog.Fatalf("Could not create data directories (%s): %v", config.DataDirectory, err)
+	}
+
+	// glog resolves its log directories exactly once (sync.Once), on the
+	// first log emit. log_dir must therefore be set BEFORE anything is
+	// logged -- in particular before the "Network selection" lines just
+	// below, which are the process's first log statements. Otherwise every
+	// log file is silently pinned to os.TempDir() and LOG_DIR/--log-dir is
+	// ignored, while stderr output (alsologtostderr, set in Node.Start)
+	// keeps working and hides the failure. The remaining glog flags are
+	// read per-emit and are still set in Node.Start.
+	config.LogDirectory = viper.GetString("log-dir")
+	if config.LogDirectory == "" {
+		config.LogDirectory = config.DataDirectory
+	}
+	flag.Set("log_dir", config.LogDirectory)
+
+	switch {
+	case forknet:
+		glog.Infof("Network selection: forked-social network (mainnet-style: %s prefixes, protocol port %d, API port %d)",
+			"FS1", config.Params.DefaultSocketPort, config.Params.DefaultJSONPort)
+	case forknetTestnet:
+		glog.Infof("Network selection: forked-social network (testnet-style: %s prefixes, protocol port %d, API port %d)",
+			"tFS", config.Params.DefaultSocketPort, config.Params.DefaultJSONPort)
 	}
 
 	config.MempoolDumpDirectory = viper.GetString("mempool-dump-dir")
@@ -224,10 +244,8 @@ func LoadConfig() *Config {
 	glog.V(2).Infof("Trusted Block Producer Public Keys: %v", config.TrustedBlockProducerPublicKeys)
 
 	// Logging
-	config.LogDirectory = viper.GetString("log-dir")
-	if config.LogDirectory == "" {
-		config.LogDirectory = config.DataDirectory
-	}
+	// (LogDirectory is computed and passed to glog early in LoadConfig --
+	// see the comment there; glog freezes its log dirs on first emit.)
 	config.GlogV = viper.GetUint64("glog-v")
 	config.GlogVmodule = viper.GetString("glog-vmodule")
 	config.LogDBSummarySnapshots = viper.GetBool("log-db-summary-snapshots")

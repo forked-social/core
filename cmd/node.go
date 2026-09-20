@@ -67,6 +67,9 @@ func (node *Node) Start(exitChannels ...*chan struct{}) {
 	flag.Set("log_dir", node.Config.LogDirectory)
 	flag.Set("v", fmt.Sprintf("%d", node.Config.GlogV))
 	flag.Set("vmodule", node.Config.GlogVmodule)
+	// Write glog output to files in log_dir; alsologtostderr below keeps the
+	// stderr stream (compose attach / podman logs) alive as well.
+	flag.Set("logtostderr", "false")
 	flag.Set("alsologtostderr", fmt.Sprintf("%t", !node.Config.NoLogToStdErr))
 	flag.Parse()
 	glog.CopyStandardLogTo("INFO")
