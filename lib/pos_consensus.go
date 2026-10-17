@@ -181,7 +181,17 @@ func (fc *FastHotStuffConsensus) HandleLocalBlockProposalEvent(event *consensus.
 
 	// Handle the event as a block proposal event for a regular block
 	if err := fc.handleBlockProposalEvent(event, consensus.FastHotStuffEventTypeConstructVoteQC); err != nil {
-		glog.Errorf("FastHotStuffConsensus.HandleLocalBlockProposalEvent: Error proposing block: %v", err)
+		// A stale view is a normal and expected race condition in the steady-state: the consensus
+		// advanced past the event's view after the proposal event was queued, which legitimately
+		// invalidates the queued proposal. Log it at a lower verbosity so it does not flood the
+		// error logs on chains that routinely outrun queued proposal events. All other errors here
+		// are genuine block proposal failures and must remain visible at ERROR. The error is still
+		// wrapped and returned to the caller exactly as before.
+		if isStaleViewError(err) {
+			glog.V(2).Infof("FastHotStuffConsensus.HandleLocalBlockProposalEvent: Error proposing block: %v", err)
+		} else {
+			glog.Errorf("FastHotStuffConsensus.HandleLocalBlockProposalEvent: Error proposing block: %v", err)
+		}
 		return errors.Wrapf(err, "FastHotStuffConsensus.HandleLocalBlockProposalEvent: ")
 	}
 
@@ -213,7 +223,15 @@ func (fc *FastHotStuffConsensus) HandleLocalTimeoutBlockProposalEvent(event *con
 
 	// Handle the event as a block proposal event for a timeout block
 	if err := fc.handleBlockProposalEvent(event, consensus.FastHotStuffEventTypeConstructTimeoutQC); err != nil {
-		glog.Errorf("FastHotStuffConsensus.HandleLocalTimeoutBlockProposalEvent: Error proposing block: %v", err)
+		// Same severity classification as HandleLocalBlockProposalEvent: the shared stale-view race
+		// is benign steady-state noise, while any other construction failure is a genuine timeout
+		// proposal failure that must stay at ERROR. The error is still wrapped and returned to the
+		// caller exactly as before.
+		if isStaleViewError(err) {
+			glog.V(2).Infof("FastHotStuffConsensus.HandleLocalTimeoutBlockProposalEvent: Error proposing block: %v", err)
+		} else {
+			glog.Errorf("FastHotStuffConsensus.HandleLocalTimeoutBlockProposalEvent: Error proposing block: %v", err)
+		}
 		return errors.Wrapf(err, "FastHotStuffConsensus.HandleLocalTimeoutBlockProposalEvent: ")
 	}
 
@@ -282,11 +300,10 @@ func (fc *FastHotStuffConsensus) handleBlockProposalEvent(
 	// race condition in the steady-state.
 	currentView := fc.fastHotStuffEventLoop.GetCurrentView()
 	if currentView > event.View {
-		return errors.Errorf(
-			"Error constructing block at height %d. Stale view %d",
-			event.TipBlockHeight+1,
-			event.View,
-		)
+		return &staleViewError{
+			blockHeight: event.TipBlockHeight + 1,
+			staleView:   event.View,
+		}
 	}
 
 	// Compute the random seed hash for the previous block's proposer signature
@@ -340,6 +357,32 @@ func (fc *FastHotStuffConsensus) handleBlockProposalEvent(
 
 	fc.logBlockProposal(blockProposal, blockHash)
 	return nil
+}
+
+// staleViewError is returned by handleBlockProposalEvent when the consensus has advanced past
+// the event's view after the proposal event was queued. As noted at the construction site, this
+// is normal and an expected race condition in the steady-state (it is most frequent when a single
+// validator produces nearly every block, since the view advances past queued proposal events on
+// a regular basis). Its error message is identical to the historical errors.Errorf text, so log
+// greps and alerting rules that matched the old message continue to match. The local proposal
+// event handlers use isStaleViewError to log this condition at a lower verbosity, while keeping
+// genuine block proposal failures visible at ERROR level.
+type staleViewError struct {
+	blockHeight uint64
+	staleView   uint64
+}
+
+func (e *staleViewError) Error() string {
+	return fmt.Sprintf("Error constructing block at height %d. Stale view %d", e.blockHeight, e.staleView)
+}
+
+// isStaleViewError returns true if the given error returned by handleBlockProposalEvent was
+// constructed by the stale view validation branch. The error is returned unwrapped from
+// handleBlockProposalEvent to its two callers, so a direct type check identifies exactly the
+// benign stale-view race and nothing else. All other errors are genuine proposal failures.
+func isStaleViewError(err error) bool {
+	_, ok := err.(*staleViewError)
+	return ok
 }
 
 // HandleLocalVoteEvent is triggered when FastHotStuffEventLoop has signaled that it wants to

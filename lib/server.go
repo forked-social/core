@@ -2595,7 +2595,26 @@ func (srv *Server) _handleBlock(pp *Peer, blk *MsgDeSoBlock, isLastBlock bool) {
 			// If the block fails the spam prevention check, then it must be signed by the
 			// bad block proposer signature or it has a bad QC. In either case, we should
 			// disconnect the peer.
-			srv._logAndDisconnectPeer(pp, blk, errors.Wrapf(err, "Error while processing block at height %v: ", blk.Header.Height).Error())
+			//
+			// Severity-only fork change (mirrors the stale-view downgrade in pos_consensus.go):
+			// this branch is reached ONLY for blocks received from a peer (self-constructed
+			// proposals go through FastHotStuffConsensus.handleBlockProposalEvent and log their
+			// own failures at ERROR in HandleLocalBlockProposalEvent), and a block arriving here
+			// is deterministically unacceptable: the protocol discards it without storing it,
+			// and the codebase's own tests treat the identical leader/QC conditions as expected
+			// no-error throws on the orphan path (see TestProcessOrphanBlockPoS). It can never
+			// stall our own production. On this fixed-validator topology the ERROR floods as
+			// benign not-leader noise, a mainnet open-peer-pool policy tuned for spam that does
+			// not fit a small validator mesh. WARNING keeps it visible and countable — a sustained
+			// burst of these WARNINGs can still signal a real leader-schedule/snapshot divergence
+			// and should be investigated. The peer disconnect is preserved unchanged, so mesh
+			// churn stays observable; only the log severity differs from _logAndDisconnectPeer,
+			// whose message text is replicated byte-identically here (all other callers of that
+			// helper keep ERROR).
+			glog.Warningf("Server._handleBlock: Encountered an error processing "+
+				"block %v. Disconnecting from peer %v: %s", blk, pp,
+				errors.Wrapf(err, "Error while processing block at height %v: ", blk.Header.Height).Error())
+			pp.Disconnect("Problem processing block")
 			return
 		} else {
 			// For any other error, we log the error and continue.
