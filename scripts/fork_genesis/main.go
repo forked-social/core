@@ -32,7 +32,7 @@ func main() {
 	flag.Parse()
 
 	// (c) Genesis balance check: the single SeedBalances output must sum to
-	// exactly MaxCoinSupply and go to the miner key.
+	// exactly ForkSeedSupplyNanos and go to the miner key.
 	var total uint64
 	for _, bal := range lib.ForkSeedBalances {
 		total += bal.AmountNanos
@@ -40,8 +40,8 @@ func main() {
 	if len(lib.ForkSeedBalances) != 1 {
 		fail("expected exactly 1 ForkSeedBalances output, got %d", len(lib.ForkSeedBalances))
 	}
-	if total != lib.MaxNanos {
-		fail("ForkSeedBalances sum %d != MaxCoinSupply (MaxNanos) %d", total, lib.MaxNanos)
+	if total != lib.ForkSeedSupplyNanos {
+		fail("ForkSeedBalances sum %d != ForkSeedSupplyNanos %d", total, lib.ForkSeedSupplyNanos)
 	}
 	if lib.PkToString(lib.ForkSeedBalances[0].PublicKey, &lib.ForkMainnetParams) != lib.MinerPubKeyBase58Check {
 		fail("ForkSeedBalances recipient is not the miner key %s", lib.MinerPubKeyBase58Check)
@@ -121,8 +121,9 @@ func main() {
 			params.DefaultEpochDurationNumBlocks)
 	}
 
-	// Guard the ZERO-new-issuance invariant for the bootstrap window: the
-	// block reward must be zero for every pre-cutover height.
+	// Guard the PoW zero-reward invariant for the bootstrap window: the block
+	// reward must be zero for every height through the cutover. (PoS staking
+	// rewards mint separately at epoch end and are not this guard's subject.)
 	cutover := uint64(lib.ForkMainnetParams.ForkHeights.ProofOfStake2ConsensusCutoverBlockHeight)
 	for hh := uint64(1); hh < cutover+5; hh++ {
 		if rw := lib.CalcBlockRewardNanos(uint32(hh), &lib.ForkMainnetParams); rw != 0 {

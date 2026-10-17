@@ -59,16 +59,17 @@ func TestForkGenesisParamsConsistency(t *testing.T) {
 					"fork_params.go after changing the genesis block")
 
 			// Documented allocation intent (backend/deploy.env and
-			// backend/validators/README.md): the entire supply sits in a
-			// single genesis output to the miner key.
+			// backend/validators/README.md): ForkSeedSupplyNanos sits in a
+			// single genesis output to the miner key; the rest of the
+			// MaxNanos cap is intentionally unallocated headroom.
 			require.Len(t, params.SeedBalances, 1,
 				"fork genesis allocation must be a single output")
 			var totalNanos uint64
 			for _, bal := range params.SeedBalances {
 				totalNanos += bal.AmountNanos
 			}
-			require.Equal(t, uint64(MaxNanos), totalNanos,
-				"fork genesis allocation must grant 100%% of the supply")
+			require.Equal(t, uint64(ForkSeedSupplyNanos), totalNanos,
+				"fork genesis allocation must grant exactly ForkSeedSupplyNanos")
 			require.Equal(t,
 				MustBase58CheckDecode(MinerPubKeyBase58Check),
 				params.SeedBalances[0].PublicKey,

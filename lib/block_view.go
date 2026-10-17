@@ -3340,6 +3340,11 @@ func (bav *UtxoView) _connectUpdateGlobalParams(
 			if bytesRead <= 0 {
 				return 0, 0, nil, fmt.Errorf("_connectUpdateGlobalParams: unable to decode StakingRewardsAPYBasisPoints as uint64")
 			}
+			// Bound the admin-tunable mint rate so a bad governance txn cannot
+			// set an absurd APY (fork policy limit, see MaxStakingRewardsAPYBasisPoints).
+			if newGlobalParamsEntry.StakingRewardsAPYBasisPoints > MaxStakingRewardsAPYBasisPoints {
+				return 0, 0, nil, RuleErrorStakingRewardsAPYBasisPointsTooHigh
+			}
 		}
 		if len(extraData[EpochDurationNumBlocksKey]) > 0 {
 			newGlobalParamsEntry.EpochDurationNumBlocks, bytesRead = Uvarint(extraData[EpochDurationNumBlocksKey])

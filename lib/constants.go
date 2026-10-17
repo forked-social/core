@@ -536,10 +536,11 @@ type DeSoParams struct {
 	// Set to true when we're running in regtest mode. This is useful for testing.
 	ExtraRegtestParamUpdaterKeys map[PkMapKey]bool
 	// DisablePoWBlockRewards suppresses PoW block rewards entirely (they are
-	// set to zero for all non-genesis heights). Networks whose entire supply
-	// is allocated in the genesis block — like the fork network, which grants
-	// 100% of MaxCoinSupply to the miner key — set this so that mining never
-	// mints new coins and the total supply can never exceed the cap.
+	// set to zero for all non-genesis heights). Networks that pre-mine their
+	// launch supply in the genesis allocation — like the fork network, which
+	// grants the miner key ForkSeedSupplyNanos, 42% of MaxCoinSupply — set
+	// this so that mining never mints new coins; on such networks staking
+	// rewards are the only issuance source.
 	DisablePoWBlockRewards bool
 	// The current protocol version we're running.
 	ProtocolVersion ProtocolVersionType

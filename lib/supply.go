@@ -34,8 +34,12 @@ const (
 	MinUSDCentsPerBitcoin = 100 * 100
 	MaxUSDCentsPerBitcoin = 1000000 * 100
 
-	// Used for sanity checks for now. This is not necessarily the actual the max supply.
-	MaxNanos = uint64(30000000) * NanosPerUnit
+	// MaxNanos is the fork's intended max supply (1,000,000,000 coins). It
+	// feeds the per-transaction sanity checks, but nothing in the protocol
+	// enforces it against issuance: epoch staking reward mints never consult a
+	// supply ledger, so total supply is expected to grow toward — and
+	// eventually past — this figure as an accepted design property.
+	MaxNanos = uint64(1000000000) * NanosPerUnit
 )
 
 var (

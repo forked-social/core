@@ -242,6 +242,7 @@ const (
 	RuleErrorBlockProductionIntervalPoSTooHigh                 RuleError = "RuleErrorBlockProductionIntervalPoSTooHigh"
 	RuleErrorTimeoutIntervalPoSTooLow                          RuleError = "RuleErrorTimeoutIntervalPoSTooLow"
 	RuleErrorTimeoutIntervalPoSTooHigh                         RuleError = "RuleErrorTimeoutIntervalPoSTooHigh"
+	RuleErrorStakingRewardsAPYBasisPointsTooHigh               RuleError = "RuleErrorStakingRewardsAPYBasisPointsTooHigh"
 
 	// DeSo Diamonds
 	RuleErrorBasicTransferHasDiamondPostHashWithoutDiamondLevel   RuleError = "RuleErrorBasicTransferHasDiamondPostHashWithoutDiamondLevel"

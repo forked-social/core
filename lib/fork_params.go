@@ -26,8 +26,9 @@ const (
 	// is the admin/super-admin key for the seed node backend.
 	FounderRootPubKeyBase58Check = "FS13vrbSsSRefiNeoJK5uHMKgCwzJJ3NMCFdEKpui7qPX4X7xSLSko"
 
-	// MinerPubKeyBase58Check receives 100% of the MaxCoinSupply in the genesis
-	// allocation. It is the key used to mine the PoW bootstrap blocks.
+	// MinerPubKeyBase58Check receives the entire ForkSeedSupplyNanos genesis
+	// allocation (42% of the MaxNanos cap). It is the key used to mine the PoW
+	// bootstrap blocks and funds the launch validators from that allocation.
 	MinerPubKeyBase58Check = "FS13xKCghHsuC7Kw6eS1Y7cxePu3ZJ6PbYpxfaZzNcRKEQFXuFU2tp"
 
 	// BlockProducerPubKeyBase58Check is the founder-operated block producer.
@@ -100,15 +101,27 @@ var ForkNetForkHeights = ForkHeights{
 	// GetEncoderMigrationHeights if you're modifying schema.
 }
 
+// ForkSeedSupplyNanos is the initial mint of the fork network: 420,000,000
+// coins paid out in the genesis allocation. That is 42% of the MaxNanos cap;
+// the remaining 58% is intentionally unallocated at genesis and exists only
+// as headroom under the cap.
+const ForkSeedSupplyNanos = uint64(420_000_000) * NanosPerUnit
+
+// MaxStakingRewardsAPYBasisPoints bounds the admin-tunable
+// StakingRewardsAPYBasisPoints global param at 25% so a founder-key
+// UPDATE_GLOBAL_PARAMS mistake cannot mint at absurd rates. It is enforced in
+// _connectUpdateGlobalParams.
+const MaxStakingRewardsAPYBasisPoints = 2500
+
 // ForkSeedBalances is the genesis allocation of the fork network: a single
-// output granting 100% of the max coin supply (MaxNanos) to the miner key.
-// Because PoW block rewards are suppressed for the fork params (see
-// DeSoParams.DisablePoWBlockRewards) and staking rewards default to 0% APY,
-// no new coins are ever minted — total supply stays fixed at MaxNanos.
+// output granting ForkSeedSupplyNanos to the miner key. PoW block rewards are
+// suppressed for the fork params (see DeSoParams.DisablePoWBlockRewards), so
+// mining never mints; supply grows only through staking reward mints, which
+// the protocol does not cap against MaxNanos (see the MaxNanos comment).
 var ForkSeedBalances = []*DeSoOutput{
 	{
 		PublicKey:   MustBase58CheckDecode(MinerPubKeyBase58Check),
-		AmountNanos: MaxNanos,
+		AmountNanos: ForkSeedSupplyNanos,
 	},
 }
 
@@ -120,7 +133,7 @@ var ForkGenesisBlock = MsgDeSoBlock{
 	Header: &MsgDeSoHeader{
 		Version:               0,
 		PrevBlockHash:         &BlockHash{},
-		TransactionMerkleRoot: mustDecodeHexBlockHash("293b99bd0e7af8f1eb3c67b8eaae88d2624d5f49c9ea0e61aad16c4d5b8433da"),
+		TransactionMerkleRoot: mustDecodeHexBlockHash("38b32569c4a9b9ad255b1bfb4bfcef372abd1fa44b4690930857d6af23fa8bf4"),
 		// Sun Aug 23 2026 @ 00:00:00 UTC.
 		TstampNanoSecs: SecondsToNanoSeconds(1787443200),
 		Height:         uint64(0),
@@ -145,7 +158,7 @@ var ForkGenesisBlock = MsgDeSoBlock{
 // ForkGenesisBlockHashHex is the hash of ForkGenesisBlock. It is verified
 // against the block at node boot by validateParams in core/cmd/node.go.
 // Recompute with: go run ./scripts/fork_genesis -print
-var ForkGenesisBlockHashHex = "d4351b1cb8f76e53af63bfe23dd420a304e91a78eb3ec34ba712a8bc5a10dd47"
+var ForkGenesisBlockHashHex = "77a061d6ca040bbf394c6d4bbd0ce219a1379b3a3e45bf36145b5dcd40ae6ad1"
 
 var ForkGenesisBlockHash = mustDecodeHexBlockHash(ForkGenesisBlockHashHex)
 
@@ -196,10 +209,10 @@ func forkParamsCommon() DeSoParams {
 		BitcoinDoubleSpendWaitSeconds: 5.0,
 		ServerMessageChannelSize:      uint32(100),
 
-		// The entire max supply was "purchased" at genesis (it is allocated in
-		// full to the miner key). This makes the BitcoinExchange purchase
-		// schedule astronomically expensive (~2^30 tranches past the start),
-		// so effectively no new coins can be created via BitcoinExchange.
+		// The purchase position at genesis sits at the full MaxNanos cap,
+		// which places the BitcoinExchange schedule astronomically past the
+		// start of the burn curve (~2^1000 tranches), so effectively no new
+		// coins can ever be created via BitcoinExchange.
 		DeSoNanosPurchasedAtGenesis: MaxNanos,
 
 		DialTimeout:               30 * time.Second,
@@ -247,12 +260,14 @@ func forkParamsCommon() DeSoParams {
 		// post-launch on-chain.
 		SeedTxns: []string{},
 
-		// 100% of the supply is allocated to the miner key at genesis.
+		// The genesis allocation (ForkSeedSupplyNanos) pays 42% of the
+		// MaxNanos cap to the miner key; the remainder stays unallocated.
 		SeedBalances: ForkSeedBalances,
 
-		// Total supply never exceeds MaxNanos: PoW block rewards are
-		// suppressed for the bootstrap window (see CalcBlockRewardNanos) and
-		// staking rewards default to 0% APY.
+		// PoW block rewards are suppressed for the bootstrap window and every
+		// height after it (see CalcBlockRewardNanos); staking rewards are the
+		// network's only issuance source and mint uncapped relative to this
+		// constant, so total supply may eventually exceed MaxNanos.
 		DisablePoWBlockRewards:         true,
 		ForkNetwork:                    true,
 		CreatorCoinTradeFeeBasisPoints: 1,
@@ -268,8 +283,9 @@ func forkParamsCommon() DeSoParams {
 		DefaultValidatorSetMaxNumValidators:   uint64(1000),
 		DefaultStakingRewardsMaxNumStakes:     uint64(10000),
 
-		// Staking reward APY is 0% so that no new supply is minted.
-		DefaultStakingRewardsAPYBasisPoints: uint64(0),
+		// Staking rewards mint new supply at 20% APY by default, redeemable
+		// from the first epoch end after the PoS cutover.
+		DefaultStakingRewardsAPYBasisPoints: uint64(2000),
 
 		// See the comment on ForkNetForkHeights: the cutover height of 300 is
 		// tuned for 144-block epochs, exactly like regtest.
