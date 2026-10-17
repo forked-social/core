@@ -286,14 +286,19 @@ func (bc *Blockchain) processBlockPoS(block *MsgDeSoBlock, currentView uint64, v
 	parentUtxoView := parentUtxoViewAndUtxoOps.UtxoView
 	// First, we perform a validation of the leader and the QC to prevent spam.
 	// If the block fails this check, we throw it away.
-	passedSpamPreventionCheck, err := bc.validateLeaderAndQC(block, blockHash, parentUtxoView, verifySignatures)
+	passedSpamPreventionCheck, spamPreventionReason, err := bc.validateLeaderAndQC(block, blockHash, parentUtxoView, verifySignatures)
 	if err != nil {
 		// If we hit an error, we can't store it since we're not sure if it passed the spam prevention check.
 		return false, false, nil, errors.Wrap(err, "processBlockPoS: Problem validating leader and QC")
 	}
 	if !passedSpamPreventionCheck {
-		// If the block fails the spam prevention check, we throw it away.
-		return false, false, nil, errors.Wrapf(RuleErrorFailedSpamPreventionsCheck, "processBlockPoS: Block failed spam prevention check: ")
+		// If the block fails the spam prevention check, we throw it away. The typed error
+		// reproduces the historical errors.Wrapf(RuleErrorFailedSpamPreventionsCheck, ...)
+		// message byte-for-byte (golden-asserted) so log greps and the gate in server.go
+		// _handleBlock keep matching unchanged; it additionally carries which sub-check failed
+		// so the local proposal handlers can classify severity. Nothing else about the
+		// returned error text or this rejection path changes.
+		return false, false, nil, &failedSpamPreventionCheckError{reason: spamPreventionReason}
 	}
 
 	// Validate the block and store it in the block index. The block is guaranteed to not be an orphan.
@@ -568,37 +573,121 @@ func (bc *Blockchain) storeValidateFailedBlockWithWrappedError(block *MsgDeSoBlo
 	return blockNode, nil
 }
 
+// spamPreventionFailureReason identifies WHICH of validateLeaderAndQC's sub-checks rejected a
+// block. The block is still rejected with the single aggregate RuleErrorFailedSpamPreventionsCheck
+// sentinel as before; the reason exists solely so that call sites which know where a block came
+// from (e.g. locally-constructed proposals in pos_consensus.go) can classify log severity for a
+// rejection they already received. It never changes validation outcomes or control flow.
+type spamPreventionFailureReason uint8
+
+const (
+	// spamPreventionReasonUnspecified is the zero value: a failure whose sub-check reason was not
+	// recorded (e.g. an intermittent error from the checks themselves). Never treated as benign.
+	spamPreventionReasonUnspecified spamPreventionFailureReason = iota
+	// spamPreventionReasonBlockHeightOutsideEpoch corresponds to the epoch membership check: the
+	// block's height is outside the current epoch as seen at its (validated) parent's height. Fires
+	// for self-constructed blocks only when the parent tip is the epoch's final block, i.e. once
+	// per epoch boundary at most. Kept at ERROR: it is rare by construction.
+	spamPreventionReasonBlockHeightOutsideEpoch
+	// spamPreventionReasonInvalidProposerPartialSignature corresponds to the proposer partial
+	// signature check. A self-constructed block is signed by this node's own registered BLS voting
+	// key, so a self-built failure here implies a keystore/registration mismatch: a real problem.
+	spamPreventionReasonInvalidProposerPartialSignature
+	// spamPreventionReasonInvalidQuorumCertificate corresponds to the QC supermajority check. A
+	// self-constructed block's QC is aggregated inside the event loop only after a supermajority
+	// check against the same snapshot validator set, so a self-built failure here implies a
+	// snapshot divergence: a real problem.
+	spamPreventionReasonInvalidQuorumCertificate
+	// spamPreventionReasonNotScheduledBlockProducer corresponds to hasValidBlockProposerPoS: the
+	// block's proposer is not the scheduled block producer for its view per the snapshot leader
+	// schedule. The local proposal path NEVER checks leader-schedule membership before constructing
+	// (the event loop's crank timer fires whenever a supermajority QC for the tip exists, with no
+	// schedule check), so EVERY replica self-rejects this way in every view it does not lead. On a
+	// fixed-validator mesh that is expected per-view steady-state noise; the block is discarded and
+	// nothing is broadcast. This is the only reason downgraded at the local proposal log sites.
+	spamPreventionReasonNotScheduledBlockProducer
+)
+
+// isBenignNotScheduledBlockProducer reports whether this reason is the only class that is benign
+// by design on the local proposal path (see spamPreventionReasonNotScheduledBlockProducer).
+func (r spamPreventionFailureReason) isBenignNotScheduledBlockProducer() bool {
+	return r == spamPreventionReasonNotScheduledBlockProducer
+}
+
+// failedSpamPreventionCheckError is returned by processBlockPoS when validateLeaderAndQC rejects a
+// block's leader/QC, replacing the historical errors.Wrapf(RuleErrorFailedSpamPreventionsCheck,
+// "processBlockPoS: Block failed spam prevention check: ") at that site. Error() reproduces that
+// historical wrapped message byte-for-byte (golden-asserted in TestSpamPreventionCheckErrorClassification)
+// so existing log greps and the server.go strings.Contains gate continue to match unchanged. The
+// sentinel remains the chain's Unwrap/Cause, exactly as the old Wrapf exposed it. The reason field
+// carries which sub-check failed so callers can classify severity without changing any behavior.
+type failedSpamPreventionCheckError struct {
+	reason spamPreventionFailureReason
+}
+
+func (e *failedSpamPreventionCheckError) Error() string {
+	return fmt.Sprintf("processBlockPoS: Block failed spam prevention check: : %s", RuleErrorFailedSpamPreventionsCheck.Error())
+}
+
+func (e *failedSpamPreventionCheckError) Unwrap() error { return RuleErrorFailedSpamPreventionsCheck }
+
+// Cause mirrors Unwrap for compatibility with github.com/pkg/errors chain walkers.
+func (e *failedSpamPreventionCheckError) Cause() error { return e.Unwrap() }
+
+// getSpamPreventionFailureReason walks err's chain (via both Go Unwrap and pkg/errors Cause,
+// matching how these chains are constructed in this codebase) looking for a
+// failedSpamPreventionCheckError. It returns the recorded reason when found.
+func getSpamPreventionFailureReason(err error) (spamPreventionFailureReason, bool) {
+	type unwrapper interface{ Unwrap() error }
+	type causer interface{ Cause() error }
+	for e := err; e != nil; {
+		if typed, ok := e.(*failedSpamPreventionCheckError); ok {
+			return typed.reason, true
+		}
+		if u, ok := e.(unwrapper); ok {
+			e = u.Unwrap()
+			continue
+		}
+		if c, ok := e.(causer); ok {
+			e = c.Cause()
+			continue
+		}
+		break
+	}
+	return spamPreventionReasonUnspecified, false
+}
+
 func (bc *Blockchain) validateLeaderAndQC(
 	block *MsgDeSoBlock,
 	blockHash *BlockHash,
 	parentUtxoView *UtxoView,
 	verifySignatures bool,
-) (_passedSpamPreventionCheck bool, _err error) {
+) (_passedSpamPreventionCheck bool, _failureReason spamPreventionFailureReason, _err error) {
 	currentEpochEntry, err := parentUtxoView.GetCurrentEpochEntry()
 	if err != nil {
-		return false, errors.Wrap(err,
+		return false, spamPreventionReasonUnspecified, errors.Wrap(err,
 			"validateLeaderAndQC: Problem getting current epoch entry")
 	}
 	// If after constructing a UtxoView based on the parent block, we find that the current block's height
 	// isn't in the current epoch, then block's stated height is wrong. The block is guaranteed to be invalid.
 	if !currentEpochEntry.ContainsBlockHeight(block.Header.Height) {
-		return false, nil
+		return false, spamPreventionReasonBlockHeightOutsideEpoch, nil
 	}
 
 	if verifySignatures {
 		snapshotAtEpochNumber, err := parentUtxoView.ComputeSnapshotEpochNumberForEpoch(currentEpochEntry.EpochNumber)
 		if err != nil {
-			return false, errors.Wrapf(err,
+			return false, spamPreventionReasonUnspecified, errors.Wrapf(err,
 				"validateLeaderAndQC: Problem getting snapshot epoch number for epoch #%d",
 				currentEpochEntry.EpochNumber)
 		}
 		isValidPartialSig, err := parentUtxoView.hasValidProposerPartialSignaturePoS(block, blockHash, snapshotAtEpochNumber)
 		if err != nil {
-			return false, errors.Wrap(err,
+			return false, spamPreventionReasonUnspecified, errors.Wrap(err,
 				"validateLeaderAndQC: Problem validating proposer partial sig")
 		}
 		if !isValidPartialSig {
-			return false, nil
+			return false, spamPreventionReasonInvalidProposerPartialSignature, nil
 		}
 		// 2. Validate QC
 		validatorsByStake, err := parentUtxoView.GetAllSnapshotValidatorSetEntriesByStake()
@@ -606,25 +695,25 @@ func (bc *Blockchain) validateLeaderAndQC(
 			// This should never happen. If the parent is validated and extends from the tip, then we should
 			// be able to fetch the validator set at its block height for it. This failure can only happen due
 			// to transient badger issues. We return false for failed spam prevention check and the error.
-			return false, errors.Wrap(err, "validateLeaderAndQC: Problem getting validator set")
+			return false, spamPreventionReasonUnspecified, errors.Wrap(err, "validateLeaderAndQC: Problem getting validator set")
 		}
 
 		// Validate the block's QC. If it's invalid, we return true for failed spam prevention check.
 		if err = bc.isValidPoSQuorumCertificate(block, validatorsByStake); err != nil {
-			return false, nil
+			return false, spamPreventionReasonInvalidQuorumCertificate, nil
 		}
 	}
 
 	isBlockProposerValid, err := parentUtxoView.hasValidBlockProposerPoS(block)
 	if err != nil {
-		return false, errors.Wrapf(err,
+		return false, spamPreventionReasonUnspecified, errors.Wrapf(err,
 			"validateAndIndexBlockPoS: Problem validating block proposer")
 	}
 	// If the block proposer is invalid, we return true for failed spam prevention check.
 	if !isBlockProposerValid {
-		return false, nil
+		return false, spamPreventionReasonNotScheduledBlockProducer, nil
 	}
-	return true, nil
+	return true, spamPreventionReasonUnspecified, nil
 }
 
 // validateAndIndexBlockPoS performs all validation checks, except the QC and leader check to prevent spam,
@@ -810,7 +899,9 @@ func (bc *Blockchain) validatePreviouslyIndexedBlockPoS(
 
 	parentUtxoView := parentUtxoViewAndUtxoOps.UtxoView
 	// If the block isn't validated or validate failed, we need to run the anti-spam checks on it.
-	passedSpamPreventionCheck, err := bc.validateLeaderAndQC(block, blockHash, parentUtxoView, verifySignatures)
+	// The sub-check failure reason is not needed here: this path silently marks the block
+	// ValidateFailed without logging or surfacing an error, so the reason is discarded.
+	passedSpamPreventionCheck, _, err := bc.validateLeaderAndQC(block, blockHash, parentUtxoView, verifySignatures)
 	if err != nil {
 		// If we hit an error, that means there was an intermittent issue when trying to
 		// validate the QC or the leader.

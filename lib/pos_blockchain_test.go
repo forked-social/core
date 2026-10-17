@@ -2915,3 +2915,90 @@ func NewTestPoSBlockchainWithValidators(t *testing.T) *TestMeta {
 	})
 	return testMeta
 }
+
+// TestSpamPreventionCheckErrorClassification pins the log-compatibility contract of the
+// spam-prevention rejection rework:
+//   - a failedSpamPreventionCheckError's message is byte-identical to the historical
+//     errors.Wrapf(RuleErrorFailedSpamPreventionsCheck, "processBlockPoS: Block failed spam
+//     prevention check: ") output that the OPS docs and the server.go strings.Contains gate
+//     match on;
+//   - the sentinel remains the error's Unwrap/Cause, as the old Wrapf exposed it;
+//   - the local proposal chain ("Error processing block locally:" appears once per wrapping
+//     layer, historically twice) stays byte-identical end to end;
+//   - only the not-scheduled-block-producer reason classifies as benign. Every other
+//     sub-check class (epoch height, proposer partial signature, QC) and unknown errors
+//     must stay classified as non-benign so their call sites keep logging at ERROR;
+//   - the stale-view classifier keeps matching only *staleViewError.
+func TestSpamPreventionCheckErrorClassification(t *testing.T) {
+	require := require.New(t)
+
+	// The exact bytes the operator's log greps and the _handleBlock gate depend on.
+	const goldenSpamCheckMessage = "processBlockPoS: Block failed spam prevention check: : RuleErrorFailedSpamPreventionsCheck"
+
+	allReasons := []spamPreventionFailureReason{
+		spamPreventionReasonUnspecified,
+		spamPreventionReasonBlockHeightOutsideEpoch,
+		spamPreventionReasonInvalidProposerPartialSignature,
+		spamPreventionReasonInvalidQuorumCertificate,
+		spamPreventionReasonNotScheduledBlockProducer,
+	}
+
+	for _, reason := range allReasons {
+		typed := &failedSpamPreventionCheckError{reason: reason}
+
+		// Message text is byte-for-byte the historical wrap, for every sub-check reason.
+		require.Equal(goldenSpamCheckMessage, typed.Error())
+		// The _handleBlock strings.Contains gate keeps matching unchanged.
+		require.Contains(typed.Error(), RuleErrorFailedSpamPreventionsCheck.Error())
+		// The sentinel remains the chain cause, like the old Wrapf exposed it.
+		require.Equal(RuleErrorFailedSpamPreventionsCheck.Error(), typed.Unwrap().Error())
+		require.Equal(typed.Unwrap(), typed.Cause())
+	}
+
+	// The full self-constructed proposal chain as the handlers receive it: processBlockPoS
+	// result wrapped by tryProcessBlockAsNewTip and then by handleBlockProposalEvent, both
+	// historically flat errors.Errorf calls with this exact doubled text.
+	notLeaderChain := &localConsensusProcessingError{
+		cause: &localConsensusProcessingError{
+			cause: &failedSpamPreventionCheckError{reason: spamPreventionReasonNotScheduledBlockProducer},
+		},
+	}
+	require.Equal(
+		"Error processing block locally: Error processing block locally: "+goldenSpamCheckMessage,
+		notLeaderChain.Error(),
+	)
+
+	// The benign class classifies as benign only for the not-scheduled-producer reason.
+	benignReason, ok := getSpamPreventionFailureReason(notLeaderChain)
+	require.True(ok)
+	require.True(benignReason.isBenignNotScheduledBlockProducer())
+
+	for _, reason := range []spamPreventionFailureReason{
+		spamPreventionReasonUnspecified,
+		spamPreventionReasonBlockHeightOutsideEpoch,
+		spamPreventionReasonInvalidProposerPartialSignature,
+		spamPreventionReasonInvalidQuorumCertificate,
+	} {
+		chain := &localConsensusProcessingError{
+			cause: &localConsensusProcessingError{cause: &failedSpamPreventionCheckError{reason: reason}},
+		}
+		// Message text stays byte-identical for the real-problem classes too.
+		require.Equal(
+			"Error processing block locally: Error processing block locally: "+goldenSpamCheckMessage,
+			chain.Error(),
+		)
+		foundReason, found := getSpamPreventionFailureReason(chain)
+		require.True(found)
+		require.Equal(reason, foundReason)
+		require.False(foundReason.isBenignNotScheduledBlockProducer())
+	}
+
+	// Unrelated local processing errors must not classify as benign spam-check rejections.
+	_, ok = getSpamPreventionFailureReason(&localConsensusProcessingError{cause: fmt.Errorf("some unrelated failure")})
+	require.False(ok)
+
+	// Stale-view classification is unaffected: only its own type matches, and a spam-check
+	// rejection never satisfies both classifiers.
+	require.True(isStaleViewError(&staleViewError{blockHeight: 12, staleView: 3}))
+	require.False(isStaleViewError(notLeaderChain))
+}

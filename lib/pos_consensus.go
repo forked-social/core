@@ -189,6 +189,19 @@ func (fc *FastHotStuffConsensus) HandleLocalBlockProposalEvent(event *consensus.
 		// wrapped and returned to the caller exactly as before.
 		if isStaleViewError(err) {
 			glog.V(2).Infof("FastHotStuffConsensus.HandleLocalBlockProposalEvent: Error proposing block: %v", err)
+		} else if r, ok := getSpamPreventionFailureReason(err); ok && r.isBenignNotScheduledBlockProducer() {
+			// The event loop's crank timer signals a local proposal in every view where a
+			// supermajority QC for the tip exists, WITHOUT any leader-schedule membership check
+			// (consensus/event_loop.go onCrankTimerTaskExecuted). The scheduled-producer check is
+			// only enforced afterwards by processBlockPoS's spam prevention check, so EVERY
+			// replica that is not the scheduled producer for a view self-rejects the block it just
+			// constructed with RuleErrorFailedSpamPreventionsCheck every such view. On this
+			// fixed-validator mesh that is expected per-view steady-state noise: the block is
+			// discarded locally and never broadcast. Downgrade only this sub-check class; any other
+			// spam-check reason on a block we built (epoch-height, partial-sig, QC) implies a
+			// real keystore/snapshot divergence and stays at ERROR below. Same message text at a
+			// lower severity; the error is still wrapped and returned exactly as before.
+			glog.V(2).Infof("FastHotStuffConsensus.HandleLocalBlockProposalEvent: Error proposing block: %v", err)
 		} else {
 			glog.Errorf("FastHotStuffConsensus.HandleLocalBlockProposalEvent: Error proposing block: %v", err)
 		}
@@ -224,10 +237,13 @@ func (fc *FastHotStuffConsensus) HandleLocalTimeoutBlockProposalEvent(event *con
 	// Handle the event as a block proposal event for a timeout block
 	if err := fc.handleBlockProposalEvent(event, consensus.FastHotStuffEventTypeConstructTimeoutQC); err != nil {
 		// Same severity classification as HandleLocalBlockProposalEvent: the shared stale-view race
-		// is benign steady-state noise, while any other construction failure is a genuine timeout
-		// proposal failure that must stay at ERROR. The error is still wrapped and returned to the
-		// caller exactly as before.
+		// and the not-scheduled-block-producer spam-check rejection are both benign steady-state
+		// noise (the crank timer constructs timeout-QC proposals without any leader-schedule check
+		// as well), while any other construction failure is a genuine timeout proposal failure that
+		// must stay at ERROR. The error is still wrapped and returned to the caller exactly as before.
 		if isStaleViewError(err) {
+			glog.V(2).Infof("FastHotStuffConsensus.HandleLocalTimeoutBlockProposalEvent: Error proposing block: %v", err)
+		} else if r, ok := getSpamPreventionFailureReason(err); ok && r.isBenignNotScheduledBlockProducer() {
 			glog.V(2).Infof("FastHotStuffConsensus.HandleLocalTimeoutBlockProposalEvent: Error proposing block: %v", err)
 		} else {
 			glog.Errorf("FastHotStuffConsensus.HandleLocalTimeoutBlockProposalEvent: Error proposing block: %v", err)
@@ -337,7 +353,9 @@ func (fc *FastHotStuffConsensus) handleBlockProposalEvent(
 	// Process the block locally
 	missingBlockHashes, err := fc.tryProcessBlockAsNewTip(blockProposal)
 	if err != nil {
-		return errors.Errorf("Error processing block locally: %v", err)
+		// Identical message text to the historical errors.Errorf call; the chain-preserving type
+		// additionally lets this handler classify the error by its underlying reason.
+		return &localConsensusProcessingError{cause: err}
 	}
 
 	if len(missingBlockHashes) > 0 {
@@ -384,6 +402,28 @@ func isStaleViewError(err error) bool {
 	_, ok := err.(*staleViewError)
 	return ok
 }
+
+// localConsensusProcessingError wraps an error at the two sites that historically used
+// errors.Errorf("Error processing block locally: %v", err). errors.Errorf cannot preserve
+// error chains (it has no %w verb) and switching those sites to errors.Wrapf would append its
+// ": " separator, changing the message text that grep-dependent operators rely on. This type
+// reproduces that exact historical message (fmt.Sprintf with the identical format and %v
+// expansion of the cause) while additionally keeping the cause in the Unwrap/Cause chain, so
+// HandleLocalBlockProposalEvent / HandleLocalTimeoutBlockProposalEvent can classify spam-check
+// rejections by sub-check reason. Message text of the full returned chain is byte-identical to
+// before this type existed.
+type localConsensusProcessingError struct {
+	cause error
+}
+
+func (e *localConsensusProcessingError) Error() string {
+	return fmt.Sprintf("Error processing block locally: %v", e.cause)
+}
+
+func (e *localConsensusProcessingError) Unwrap() error { return e.cause }
+
+// Cause mirrors Unwrap for compatibility with github.com/pkg/errors chain walkers.
+func (e *localConsensusProcessingError) Cause() error { return e.cause }
 
 // HandleLocalVoteEvent is triggered when FastHotStuffEventLoop has signaled that it wants to
 // vote on the current tip. This functions validates the vote signal, then it constructs the
@@ -687,7 +727,10 @@ func (fc *FastHotStuffConsensus) tryProcessBlockAsNewTip(block *MsgDeSoBlock) ([
 		true, // Make sure we verify signatures in the block
 	)
 	if err != nil {
-		return nil, errors.Errorf("Error processing block locally: %v", err)
+		// Identical message text to the historical errors.Errorf call; the chain-preserving type
+		// lets the local proposal handlers classify the error by its underlying reason. The peer
+		// path re-flattens this at HandleBlock with the same text, so no consumer sees a change.
+		return nil, &localConsensusProcessingError{cause: err}
 	}
 
 	// If the incoming block is an orphan, then there's nothing we can do. We return the missing ancestor
